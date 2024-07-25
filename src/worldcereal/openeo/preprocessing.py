@@ -1,7 +1,8 @@
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from openeo import UDF, Connection, DataCube
+from openeo.api.process import Parameter
 from openeo_gfmap import (
     Backend,
     BackendContext,
@@ -25,7 +26,7 @@ def raw_datacube_S2(
     connection: Connection,
     backend_context: BackendContext,
     spatial_extent: SpatialContext,
-    temporal_extent: TemporalContext,
+    temporal_extent: Union[TemporalContext,Parameter],
     bands: List[str],
     fetch_type: FetchType,
     filter_tile: Optional[str] = None,
@@ -78,8 +79,8 @@ def raw_datacube_S2(
     scl_cube = connection.load_collection(
         collection_id="SENTINEL2_L2A",
         bands=["SCL"],
-        temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
-        spatial_extent=dict(spatial_extent) if fetch_type == FetchType.TILE else None,
+        temporal_extent=[temporal_extent.start_date, temporal_extent.end_date] if isinstance(temporal_extent, TemporalContext) else temporal_extent,
+        spatial_extent=(spatial_extent if isinstance(spatial_extent,Parameter) else dict(spatial_extent) )if fetch_type == FetchType.TILE else None,
         properties=scl_cube_properties,
     )
 
@@ -118,7 +119,7 @@ def raw_datacube_S2(
         additional_masks = scl_dilated_mask.merge_cubes(distance_to_cloud)
 
         # Try filtering using the geometry
-        if fetch_type == FetchType.TILE:
+        if fetch_type == FetchType.TILE and not isinstance(spatial_extent, Parameter):
             additional_masks = additional_masks.filter_spatial(
                 spatial_extent.to_geojson()
             )
@@ -193,13 +194,16 @@ def raw_datacube_S1(
         Backend.FED,
     ]:
         try:
-            orbit_direction = select_S1_orbitstate(
-                backend_context, spatial_extent, temporal_extent
-            )
-            print(
-                f"Selected orbit direction: {orbit_direction} from max "
-                "accumulated area overlap between bounds and products."
-            )
+            if isinstance(spatial_extent,Parameter):
+                orbit_direction = Parameter.string(name="orbit_direction", description="Orbit direction to filter the Sentinel-1 data. ", values = ["ASCENDING","DESCENDING"], default="ASCENDING")
+            else:
+                orbit_direction = select_S1_orbitstate(
+                    backend_context, spatial_extent, temporal_extent
+                )
+                print(
+                    f"Selected orbit direction: {orbit_direction} from max "
+                    "accumulated area overlap between bounds and products."
+                )
         except UncoveredS1Exception as exc:
             orbit_direction = "ASCENDING"
             print(
@@ -275,8 +279,8 @@ def precomposited_datacube_METEO(
         - This function do not support fetching points or polygons, but only
           tiles.
     """
-    temporal_extent = [temporal_extent.start_date, temporal_extent.end_date]
-    spatial_extent = dict(spatial_extent)
+    temporal_extent = temporal_extent if isinstance(temporal_extent,Parameter) else [temporal_extent.start_date, temporal_extent.end_date]
+    spatial_extent = spatial_extent if isinstance(spatial_extent,Parameter) else dict(spatial_extent)
 
     # Monthly composited METEO data
     cube = connection.load_stac(
